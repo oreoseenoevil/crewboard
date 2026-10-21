@@ -1,0 +1,6 @@
+{
+  "name": "crewboard",
+  "description": "A progress band and a Workers pane for Claude Code: subagents, local and cloud workers and long tasks.",
+  "owner": { "name": "oreoseenoevil" },
+  "plugins": [{ "name": "crewboard", "source": "./" }]
+}

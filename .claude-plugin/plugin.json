@@ -1,0 +1,48 @@
+{
+  "name": "crewboard",
+  "version": "2.0.0",
+  "description": "A progress band above the prompt and a Workers pane: subagents, local claude -p runs, cloud workers and long CLI tasks, with model, task progress, context, cost and time.",
+  "author": {
+    "name": "oreoseenoevil"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Pane language",
+      "description": "auto follows Claude Code's language setting, then the system locale; en, ru or he (Hebrew, drawn right to left)",
+      "default": "auto",
+      "options": [
+        "auto",
+        "en",
+        "ru",
+        "he"
+      ]
+    },
+    "autoOpen": {
+      "type": "string",
+      "title": "Open the Workers pane",
+      "description": "plan: when a plan is reported or a worker in the status file starts; any: also when any subagent starts",
+      "default": "plan",
+      "options": [
+        "plan",
+        "any"
+      ]
+    },
+    "workersFile": {
+      "type": "string",
+      "title": "Status file",
+      "description": "Path of workers.json. Empty: crewboard/workers.json under your .claude folder. A leading ~ is your home folder.",
+      "default": ""
+    },
+    "repo": {
+      "type": "string",
+      "title": "Git repository",
+      "description": "Repository whose origin is checked for cloud branches cloud/<ID>. Empty: the session's working directory.",
+      "default": ""
+    }
+  },
+  "homepage": "https://github.com/oreoseenoevil/crewboard",
+  "repository": "https://github.com/oreoseenoevil/crewboard",
+  "license": "MIT"
+}
