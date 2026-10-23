@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
 import {
   cloudRow, isWorkerRow, localRow, parseWorkerList, projectDirName, pushedCloudIds, resultStats, taskRow, transcriptStats,
+  triggerRunEntry, withCloudEntry,
   type LocalFacts, type TaskEntry, type TranscriptStats, type WorkerEntry,
 } from './workers'
 
@@ -1115,6 +1116,26 @@ export const register: Register = (on, options) => {
     } finally {
       await update($, flow, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev))
     }
+  })
+
+  // A cloud worker started with RemoteTrigger `run` joins the status file by itself: its id is the branch its prompt pushes.
+  on('tool.call', { tool: 'RemoteTrigger' }, async ($, e, next) => {
+    const answer = await next(e)
+    if (e.action !== 'run' || answer.deny !== undefined || answer.isError) return answer
+    try {
+      const c = await configOf($, options)
+      const entry = c.file ? triggerRunEntry(answer.result.json, await $.clock.now()) : undefined
+      // A file that is there but cannot be read is left alone, never replaced.
+      const current = entry && ((await $.fs.exists(c.file)) ? await $.fs.read(c.file) : '')
+      const text = entry && typeof current === 'string' ? withCloudEntry(current, entry) : undefined
+      if (text) {
+        await $.fs.write(c.file, text)
+        await sync($, options)
+      }
+    } catch {
+      // The pane is a convenience: a failed write never changes the tool's answer.
+    }
+    return answer
   })
 
   on('agent.spawn', async ($, e, next) => {

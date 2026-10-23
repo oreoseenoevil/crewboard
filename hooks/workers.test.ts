@@ -1,6 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { cloudRow, commandText, localRow, parseWorkerList, projectDirName, pushedCloudIds, resultStats, roleOf, taskRow, transcriptStats } from './workers'
+import {
+  cloudRow, commandText, localRow, parseWorkerList, projectDirName, pushedBranchOf, pushedCloudIds, resultStats, roleOf, taskRow, transcriptStats,
+  triggerRunEntry, withCloudEntry,
+} from './workers'
 
 test('a worker shows what it is running now, named the way a person would say it', async () => {
   const use = (id: string, name: string, input: object, at: string) => JSON.stringify({ type: 'assistant', timestamp: at, message: { id: `m-${id}`, model: 'claude-sonnet-5-5', content: [{ type: 'tool_use', id, name, input }], usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })
@@ -76,4 +79,25 @@ test('the status file, folder names and cloud branches', async () => {
   expect([...pushed]).toEqual(['UC2-20'])
   expect(cloudRow(list.cloud[0]!, true, 7, windowOf, 9).status).toBe('done')
   expect(cloudRow(list.cloud[0]!, false, undefined, windowOf, 9).status).toBe('running')
+})
+
+test('a RemoteTrigger run lists its cloud worker under the branch its prompt pushes', async () => {
+  const prompt = 'Run: git fetch origin cloud/plans dev && git show origin/cloud/plans:docs/cloud-prompts/RS-A.md\nRead it, then commit only that file, push to cloud/RS-A, and give its final answer.'
+  expect(pushedBranchOf(prompt)).toBe('RS-A')
+  expect(pushedBranchOf('Finish with git push -u origin HEAD:cloud/UC2-20.')).toBe('UC2-20')
+  expect(pushedBranchOf('Read origin/cloud/plans:docs/a.md and report back.')).toBe(undefined)
+
+  const run = { session_id: 'cse_01Abc', trigger: { name: 'Re-score part A', derived_state: { model: 'claude-opus-5-5', prompt } } }
+  const entry = triggerRunEntry(JSON.stringify(run), 5)
+  expect(entry).toEqual({ id: 'RS-A', label: 'Re-score part A', model: 'claude-opus-5-5', session: 'cse_01Abc', startedAt: 5 })
+  expect(triggerRunEntry(JSON.stringify({ ...run, session_id: 'nope' }), 5)).toBe(undefined)
+  expect(triggerRunEntry('HTTP 500', 5)).toBe(undefined)
+
+  const file = JSON.stringify({ local: [], cloud: [{ id: 'UC2-20' }], remaining: ['x'] })
+  const added = parseWorkerList(withCloudEntry(file, entry!) ?? '')
+  expect(added.cloud.map(e => [e.id, e.session])).toEqual([['UC2-20', undefined], ['RS-A', 'cse_01Abc']])
+  expect(JSON.parse(withCloudEntry(file, entry!) ?? '{}').remaining).toEqual(['x'])
+  expect(withCloudEntry(withCloudEntry(file, entry!) ?? '', entry!)).toBe(undefined)
+  expect(parseWorkerList(withCloudEntry('', entry!) ?? '').cloud.length).toBe(1)
+  expect(withCloudEntry('{ broken', entry!)).toBe(undefined)
 })

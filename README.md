@@ -8,7 +8,7 @@ A Claude Code mod: a progress band above the prompt and a **Workers** pane that 
 - **Workers pane** (`/workers` toggles it; `/workers open` opens it or brings it forward without toggling): running, finished and planned rows with model, effort, task progress, context, estimated cost and time. Running rows say what they are doing now ("Tests: dues.itest.ts", "Editing a.ts").
   - **Subagents** from this chat, including `team-sonnet`, `team-opus` and `team-opus-xhigh`.
   - **Local workers**: `claude -p` processes started outside the chat, read from a status file.
-  - **Cloud workers**: a cloud session that pushes the branch `cloud/<ID>`; the row is done once that branch exists on `origin`.
+  - **Cloud workers**: a cloud session that pushes the branch `cloud/<ID>`; the row is done once that branch exists on `origin`. A `RemoteTrigger` run from this chat adds its own row: the id is the `cloud/<ID>` its prompt says to push, with the run's session, model and trigger name.
   - **Tasks**: long CLI runs (a test suite, a build) with a progress bar counted from their log.
 - Only the 15 newest finished rows are drawn; a **Show All (n)** / **Show Fewer** button lists the rest, so the pane stays light with many workers.
 - Each crab wears its model: Haiku (racer), Sonnet (chef), Opus (engineer), Opus xhigh (detective), Fable (astronaut). A session worker wears its role instead (frontend, backend, design, qa). Animations stop under `prefers-reduced-motion`.
@@ -58,7 +58,7 @@ The orchestrator keeps one JSON file; the mod re-reads it every 30 seconds and o
 ```
 
 - **local**: a `claude -p` run. Start it with its output redirected to `<ID>.result.json` (`--output-format json`) in the **same folder as workers.json**; the file exists from launch and has content once the run ends, which is when the row turns done (or failed, if the result is an error). An optional `<ID>.prompt.txt` in that folder dates the start. While it runs, the row reads the run's newest transcript under `<.claude folder>/projects/` for live context, tokens, cost and the current step. `worktree` is the run's working folder; without it the mod looks at `<repo>/.claude/worktrees/<id in lower case>`. Finished runs take their figures from the result file and read no transcript.
-- **cloud**: a cloud worker. `model`, `effort`, `label`, `role` and `startedAt` are optional. `session` (a `cse_...` id) is kept on the row data; the pane draws no link from it. Done when `origin` has `cloud/<ID>`.
+- **cloud**: a cloud worker. `model`, `effort`, `label`, `role` and `startedAt` are optional. `session` (a `cse_...` id) is kept on the row data; the pane draws no link from it. Done when `origin` has `cloud/<ID>`. A `RemoteTrigger` `run` writes this entry itself when the trigger's prompt names the branch it pushes (the first `cloud/<ID>` after "push" on a line, else the last `cloud/<ID>` that is not a `cloud/<ID>:path`); an id already listed is left as it is.
 - **tasks**: `log` is the file the run writes, `count` a regular expression matched against each line of it (one match is one finished step), `expected` the total for a progress bar (omit it to show a bare count), `failed` an optional regular expression for failed steps, and `output` with `done` the file and expression that say the run ended. Write non-ASCII marks as `\uXXXX` escapes if the file's encoding is uncertain.
 - `role` is `frontend`, `backend`, `design` or `qa`; without it the row's role is guessed from its label.
 

@@ -75,6 +75,58 @@ export function parseWorkerList(text: string): WorkerList {
   }
 }
 
+// `cloud/<ID>` not followed by more of a name or a `:` path, so `origin/cloud/plans:docs/a.md` is no branch.
+const BRANCH = /\bcloud\/([A-Za-z0-9._-]+)(?![A-Za-z0-9._:-])/g
+
+/** The `cloud/<ID>` a cloud worker's prompt pushes: the first named after "push" on its line, else the last named. */
+export function pushedBranchOf(prompt: string): string | undefined {
+  const named = [...prompt.matchAll(BRANCH)]
+    .map(m => ({ id: (m[1] ?? '').replace(/\.+$/, ''), at: m.index ?? 0 }))
+    .filter(b => ID.test(b.id))
+  const pushed = named.find(b => /\bpush\b[^\n]*$/i.test(prompt.slice(0, b.at)))
+  return (pushed ?? named[named.length - 1])?.id
+}
+
+type TriggerRun = {
+  session_id?: unknown
+  trigger?: {
+    name?: unknown
+    derived_state?: { model?: unknown; prompt?: unknown }
+    job_config?: { ccr?: { session_context?: { model?: unknown }; events?: Array<{ data?: { message?: { content?: unknown } } }> } }
+  }
+}
+
+/** The cloud worker a RemoteTrigger `run` started, from the API's answer; none when its prompt names no branch it pushes. */
+export function triggerRunEntry(json: string, at: number): WorkerEntry | undefined {
+  let run: TriggerRun | null
+  try {
+    run = JSON.parse(json) as TriggerRun | null
+  } catch {
+    return undefined
+  }
+  const t = run?.trigger
+  const prompt = str(t?.derived_state?.prompt) ?? str(t?.job_config?.ccr?.events?.[0]?.data?.message?.content)
+  const id = prompt && pushedBranchOf(prompt)
+  const session = run?.session_id
+  if (!id || typeof session !== 'string' || !SESSION.test(session)) return undefined
+  return { id, label: str(t?.name), model: str(t?.derived_state?.model) ?? str(t?.job_config?.ccr?.session_context?.model), session, startedAt: at }
+}
+
+/** The status file with one more cloud worker; none when that id is listed already or the file is not a status file. */
+export function withCloudEntry(text: string, entry: WorkerEntry): string | undefined {
+  let raw: unknown
+  try {
+    raw = text.trim() ? JSON.parse(text.replace(/^﻿/, '')) : { local: [], cloud: [], tasks: [] }
+  } catch {
+    return undefined
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const list = raw as Record<string, unknown>
+  const cloud: unknown[] = Array.isArray(list.cloud) ? list.cloud : []
+  if (cloud.some(one => (one as { id?: unknown } | null)?.id === entry.id)) return undefined
+  return JSON.stringify({ ...list, cloud: [...cloud, entry] }, null, 2)
+}
+
 const base = (path: unknown): string => (typeof path === 'string' ? path.split(/[\\/]/).pop() || path : '')
 
 /** A shell command as a person would name it: "Tests: dues.itest.ts", "Typecheck ui", "git log". */
