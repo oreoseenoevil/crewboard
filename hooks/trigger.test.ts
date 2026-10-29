@@ -39,3 +39,34 @@ test('a RemoteTrigger run writes its cloud worker into the status file once; oth
   await $.tool.call({ tool: 'RemoteTrigger', action: 'get', trigger_id: 'trig_01A' } as never)
   expect(written.length).toBe(1)
 })
+
+test('a claude -p launch in the shell writes its local worker into the status file; other commands write nothing', async ($, on) => {
+  mock.clock(on, { now: AT })
+  mock.env(on, { USERPROFILE: 'C:\\home', LANG: 'en_US.UTF-8' })
+  on('settings.read', async () => ({ value: {} }) as never)
+  on('session.cwd', () => ({ value: 'C:\\repo' }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  let file = JSON.stringify({ local: [], cloud: [], tasks: [] })
+  const written: string[] = []
+  on('fs.exists', () => ({ value: true }) as never)
+  on('fs.read', (_$, e) => (String((e as { path?: string }).path).endsWith('workers.json') ? { value: file } : { error: new Error('missing') }) as never)
+  on('fs.write', (_$, e) => {
+    const w = e as { path: string; text: string }
+    written.push(w.path)
+    file = w.text
+    return { value: undefined } as never
+  })
+  on('fs.stat', () => ({ error: new Error('missing') }) as never)
+  on('fs.list', () => ({ value: [] }) as never)
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never)
+  on('tool.call', { tool: 'Bash' }, async () => ({ result: 'started' }) as never)
+
+  await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(written.length).toBe(0)
+  await $.tool.call({ tool: 'Bash', command: 'cd C:/wt/fix-sr && claude -p --model sonnet --effort high < C:/b/p.txt > C:/out/FIX-SR.result.json' } as never)
+  expect(written).toEqual(['C:\\home\\.claude\\crewboard\\workers.json'])
+  expect(JSON.parse(file)).toMatchObject({
+    local: [{ id: 'FIX-SR', model: 'sonnet', effort: 'high', worktree: 'C:/wt/fix-sr', result: 'C:/out/FIX-SR.result.json', startedAt: AT }],
+  })
+})

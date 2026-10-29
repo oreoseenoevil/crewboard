@@ -3,7 +3,7 @@
 // the files and feeds them in.
 import type { AgentRun } from '../types'
 
-export type WorkerEntry = { id: string; label?: string; model?: string; effort?: string; worktree?: string; startedAt?: number; role?: string; session?: string }
+export type WorkerEntry = { id: string; label?: string; model?: string; effort?: string; worktree?: string; startedAt?: number; role?: string; session?: string; result?: string }
 /** A long CLI run (a test suite, a build): progress is lines matching `count` in `log`, out of `expected`. */
 export type TaskEntry = {
   id: string; label?: string; role?: string; startedAt?: number
@@ -62,6 +62,7 @@ const entries = (value: unknown): WorkerEntry[] =>
           startedAt: when(one.startedAt),
           role: str(one.role),
           session: typeof one.session === 'string' && SESSION.test(one.session) ? one.session : undefined,
+          result: str(one.result),
         }))
     : []
 
@@ -78,13 +79,23 @@ export function parseWorkerList(text: string): WorkerList {
 // `cloud/<ID>` not followed by more of a name or a `:` path, so `origin/cloud/plans:docs/a.md` is no branch.
 const BRANCH = /\bcloud\/([A-Za-z0-9._-]+)(?![A-Za-z0-9._:-])/g
 
-/** The `cloud/<ID>` a cloud worker's prompt pushes: the first named after "push" on its line, else the last named. */
+/** The `cloud/<ID>` a cloud worker's prompt pushes: the first named after "push" on its line. A branch it only fetches or reads is not one. */
 export function pushedBranchOf(prompt: string): string | undefined {
   const named = [...prompt.matchAll(BRANCH)]
     .map(m => ({ id: (m[1] ?? '').replace(/\.+$/, ''), at: m.index ?? 0 }))
     .filter(b => ID.test(b.id))
-  const pushed = named.find(b => /\bpush\b[^\n]*$/i.test(prompt.slice(0, b.at)))
-  return (pushed ?? named[named.length - 1])?.id
+  return named.find(b => /\bpush\b[^\n]*$/i.test(prompt.slice(0, b.at)))?.id
+}
+
+// A brief the prompt names (`.../cloud-prompts/FIX-AMENITIES.md`), and a task id in a routine's name ("Atrium FIX-AMENITIES").
+const BRIEF = /\bcloud-prompts\/([A-Za-z0-9._-]{1,64})\.md\b/
+const NAME_ID = /^[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+$/
+
+/** A cloud worker's id: the branch its prompt pushes, else the brief its prompt names, else the task id in its routine's name. */
+export function cloudIdOf(prompt: string, name?: string): string | undefined {
+  const brief = BRIEF.exec(prompt)?.[1]
+  const fromName = name?.split(/\s+/).find(word => NAME_ID.test(word))
+  return [pushedBranchOf(prompt), brief, fromName].find((id): id is string => !!id && ID.test(id))
 }
 
 type TriggerRun = {
@@ -96,7 +107,7 @@ type TriggerRun = {
   }
 }
 
-/** The cloud worker a RemoteTrigger `run` started, from the API's answer; none when its prompt names no branch it pushes. */
+/** The cloud worker a RemoteTrigger `run` started, from the API's answer; none when no id can be told from its prompt or name. */
 export function triggerRunEntry(json: string, at: number): WorkerEntry | undefined {
   let run: TriggerRun | null
   try {
@@ -106,13 +117,13 @@ export function triggerRunEntry(json: string, at: number): WorkerEntry | undefin
   }
   const t = run?.trigger
   const prompt = str(t?.derived_state?.prompt) ?? str(t?.job_config?.ccr?.events?.[0]?.data?.message?.content)
-  const id = prompt && pushedBranchOf(prompt)
+  const id = prompt ? cloudIdOf(prompt, str(t?.name)) : undefined
   const session = run?.session_id
   if (!id || typeof session !== 'string' || !SESSION.test(session)) return undefined
   return { id, label: str(t?.name), model: str(t?.derived_state?.model) ?? str(t?.job_config?.ccr?.session_context?.model), session, startedAt: at }
 }
 
-/** The status file with one more cloud worker; none when that id is listed already or the file is not a status file. */
+/** The status file with one more cloud worker; none when that run is listed already or the file is not a status file. A new run of a listed id replaces its row. */
 export function withCloudEntry(text: string, entry: WorkerEntry): string | undefined {
   let raw: unknown
   try {
@@ -123,8 +134,49 @@ export function withCloudEntry(text: string, entry: WorkerEntry): string | undef
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const list = raw as Record<string, unknown>
   const cloud: unknown[] = Array.isArray(list.cloud) ? list.cloud : []
-  if (cloud.some(one => (one as { id?: unknown } | null)?.id === entry.id)) return undefined
-  return JSON.stringify({ ...list, cloud: [...cloud, entry] }, null, 2)
+  const listed = cloud.find(one => (one as { id?: unknown } | null)?.id === entry.id) as { session?: unknown } | undefined
+  if (listed && (!entry.session || listed.session === entry.session)) return undefined
+  return JSON.stringify({ ...list, cloud: [...cloud.filter(one => one !== listed), entry] }, null, 2)
+}
+
+const unquote = (s: string): string => s.replace(/^(["'])(.*)\1$/, '$2')
+const isAbsolute = (path: string): boolean => /^([A-Za-z]:[\\/]|[\\/])/.test(path)
+
+/**
+ * The local worker a shell command starts: a `claude -p` run whose output goes to `<ID>.result.json`.
+ * Its folder is a leading `cd` or `Set-Location`, which a relative result path is read from.
+ * None when the command is no such run, or names its paths through variables the shell would expand.
+ */
+export function cliLaunchEntry(command: string, at: number): WorkerEntry | undefined {
+  if (!/(^|[\s;&|(])claude(\.exe)?\s+(-p|--print)\b/.test(command)) return undefined
+  const out = /(?:^|[^0-9&])>\s*("[^"]+\.result\.json"|'[^']+\.result\.json'|[^\s;&|"']+\.result\.json)/.exec(command)?.[1]
+  if (!out) return undefined
+  const cd = /^\s*(?:cd|Set-Location)\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)/i.exec(command)?.[1]
+  const resultPath = unquote(out)
+  const worktree = cd ? unquote(cd) : undefined
+  if (/[$%]/.test(resultPath) || (worktree && /[$%]/.test(worktree))) return undefined
+  const id = (resultPath.split(/[\\/]/).pop() ?? '').replace(/\.result\.json$/, '')
+  if (!ID.test(id)) return undefined
+  const result = isAbsolute(resultPath) ? resultPath : worktree ? `${worktree.replace(/[\\/]+$/, '')}/${resultPath}` : undefined
+  if (!result) return undefined
+  const flag = (name: string) => /^[A-Za-z0-9._-]+$/.exec(new RegExp(`--${name}[ =](\\S+)`).exec(command)?.[1] ?? '')?.[0]
+  return { id, model: flag('model'), effort: flag('effort'), worktree, result, startedAt: at }
+}
+
+/** The status file with this local worker, replacing an earlier row of the same id; none when the file is not a status file. */
+export function withLocalEntry(text: string, entry: WorkerEntry): string | undefined {
+  let raw: unknown
+  try {
+    raw = text.trim() ? JSON.parse(text.replace(/^﻿/, '')) : { local: [], cloud: [], tasks: [] }
+  } catch {
+    return undefined
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const list = raw as Record<string, unknown>
+  const local: unknown[] = Array.isArray(list.local) ? list.local : []
+  const kept = local.filter(one => (one as { id?: unknown } | null)?.id !== entry.id)
+  const clean = Object.fromEntries(Object.entries(entry).filter(([, v]) => v !== undefined))
+  return JSON.stringify({ ...list, local: [...kept, clean] }, null, 2)
 }
 
 const base = (path: unknown): string => (typeof path === 'string' ? path.split(/[\\/]/).pop() || path : '')

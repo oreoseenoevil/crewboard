@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
 import {
   cloudRow, isWorkerRow, localRow, parseWorkerList, projectDirName, pushedCloudIds, resultStats, taskRow, transcriptStats,
-  triggerRunEntry, withCloudEntry,
+  cliLaunchEntry, triggerRunEntry, withCloudEntry, withLocalEntry,
   type LocalFacts, type TaskEntry, type TranscriptStats, type WorkerEntry,
 } from './workers'
 
@@ -872,7 +872,7 @@ const withStart = <T extends { id: string; startedAt?: number }>(kind: string, e
 }
 
 async function localFacts($: EngineInterface, c: Config, entry: WorkerEntry): Promise<LocalFacts> {
-  const resultPath = join(c.dir, `${entry.id}.result.json`)
+  const resultPath = entry.result ?? join(c.dir, `${entry.id}.result.json`)
   const resultStat = await $.fs.stat(resultPath).catch(() => undefined)
   const key = resultStat ? `${resultStat.mtimeMs}:${resultStat.size}` : ''
   const hit = finishedLocal.get(entry.id)
@@ -978,6 +978,26 @@ const configOf = async ($: EngineInterface, options: Options): Promise<Config> =
 // One sync; a worker that started since the last one opens the pane.
 async function sync($: EngineInterface, options: Options): Promise<void> {
   if (await syncWorkers($, await configOf($, options))) await autoOpen($, 'workers')
+}
+
+// A shell command that starts a `claude -p` worker writes that worker into the status file.
+async function listLaunch($: EngineInterface, options: Options, command: unknown): Promise<void> {
+  try {
+    // Most shell calls are not launches: they read no config.
+    const entry = typeof command === 'string' ? cliLaunchEntry(command, await $.clock.now()) : undefined
+    if (!entry) return
+    const c = await configOf($, options)
+    if (!c.file) return
+    // A file that is there but cannot be read is left alone, never replaced.
+    const current = (await $.fs.exists(c.file)) ? await $.fs.read(c.file) : ''
+    const text = typeof current === 'string' ? withLocalEntry(current, entry) : undefined
+    if (text) {
+      await $.fs.write(c.file, text)
+      await sync($, options)
+    }
+  } catch {
+    // The pane is a convenience: a failed write never changes the tool's answer.
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -1118,7 +1138,20 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // A cloud worker started with RemoteTrigger `run` joins the status file by itself: its id is the branch its prompt pushes.
+  // A local `claude -p` worker started from the shell joins the status file by itself, with its own result file.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const answer = await next(e)
+    if (answer.deny === undefined) await listLaunch($, options, e.command)
+    return answer
+  })
+  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => {
+    const answer = await next(e)
+    if (answer.deny === undefined) await listLaunch($, options, e.command)
+    return answer
+  })
+
+  // A cloud worker started with RemoteTrigger `run` joins the status file by itself: its id is the branch its prompt
+  // pushes, else the brief its prompt names, else the task id in the routine's name.
   on('tool.call', { tool: 'RemoteTrigger' }, async ($, e, next) => {
     const answer = await next(e)
     if (e.action !== 'run' || answer.deny !== undefined || answer.isError) return answer

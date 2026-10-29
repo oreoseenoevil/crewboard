@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   cloudRow, commandText, localRow, parseWorkerList, projectDirName, pushedBranchOf, pushedCloudIds, resultStats, roleOf, taskRow, transcriptStats,
-  triggerRunEntry, withCloudEntry,
+  cliLaunchEntry, cloudIdOf, triggerRunEntry, withCloudEntry, withLocalEntry,
 } from './workers'
 
 test('a worker shows what it is running now, named the way a person would say it', async () => {
@@ -100,4 +100,41 @@ test('a RemoteTrigger run lists its cloud worker under the branch its prompt pus
   expect(withCloudEntry(withCloudEntry(file, entry!) ?? '', entry!)).toBe(undefined)
   expect(parseWorkerList(withCloudEntry('', entry!) ?? '').cloud.length).toBe(1)
   expect(withCloudEntry('{ broken', entry!)).toBe(undefined)
+})
+
+test('a fetched branch is never a cloud id: the brief, then the routine name, name the worker', () => {
+  const prompt = 'Run: git fetch origin cloud/plans cloud/nov1-rc cloud/nov1-base && git show origin/cloud/plans:docs/superpowers/cloud-prompts/FIX-AMENITIES.md\nRead it fully, then do exactly what it says.'
+  expect(pushedBranchOf(prompt)).toBe(undefined)
+  expect(cloudIdOf(prompt, 'Atrium FIX-AMENITIES')).toBe('FIX-AMENITIES')
+  expect(cloudIdOf('Fix the dues screen, then report back.', 'Atrium MIGRATE-1 budgets tables and dates')).toBe('MIGRATE-1')
+  expect(cloudIdOf('Fix the dues screen, then report back.', 'Nightly check')).toBe(undefined)
+  expect(cloudIdOf('Read cloud-prompts/A.md, then git push origin HEAD:cloud/B-2.', 'X-1')).toBe('B-2')
+
+  const run = { session_id: 'cse_02New', trigger: { name: 'Atrium FIX-AMENITIES', derived_state: { model: 'claude-opus-5-5', prompt } } }
+  const entry = triggerRunEntry(JSON.stringify(run), 7)
+  expect(entry?.id).toBe('FIX-AMENITIES')
+  // A new run of a listed id replaces its row; the same run is not listed twice.
+  const file = JSON.stringify({ cloud: [{ id: 'FIX-AMENITIES', session: 'cse_01Old' }, { id: 'nov1-base' }] })
+  const replaced = parseWorkerList(withCloudEntry(file, entry!) ?? '')
+  expect(replaced.cloud.map(e => [e.id, e.session])).toEqual([['nov1-base', undefined], ['FIX-AMENITIES', 'cse_02New']])
+  expect(withCloudEntry(withCloudEntry(file, entry!) ?? '', entry!)).toBe(undefined)
+})
+
+test('a claude -p launch from the shell lists its local worker with its own result file', () => {
+  const bash = 'cd C:/work/wt/fix-sr && claude -p --model sonnet --effort high --output-format json < C:/work/briefs/FIX-SR.txt > C:/work/out/FIX-SR.result.json 2> C:/work/out/FIX-SR.err.txt'
+  expect(cliLaunchEntry(bash, 9)).toEqual({ id: 'FIX-SR', model: 'sonnet', effort: 'high', worktree: 'C:/work/wt/fix-sr', result: 'C:/work/out/FIX-SR.result.json', startedAt: 9 })
+  const relative = 'Set-Location "C:\\work\\wt\\mig"; claude -p --model=opus < p.txt > "MIG-1.result.json"'
+  expect(cliLaunchEntry(relative, 1)).toEqual({ id: 'MIG-1', model: 'opus', effort: undefined, worktree: 'C:\\work\\wt\\mig', result: 'C:\\work\\wt\\mig/MIG-1.result.json', startedAt: 1 })
+  // No launch, a result path the shell would expand, no folder for a relative path, or stderr alone: no row.
+  expect(cliLaunchEntry('git status > out.result.json', 1)).toBe(undefined)
+  expect(cliLaunchEntry('claude -p < p.txt > "$S/FIX.result.json"', 1)).toBe(undefined)
+  expect(cliLaunchEntry('claude -p < p.txt > FIX.result.json', 1)).toBe(undefined)
+  expect(cliLaunchEntry('claude -p < p.txt 2> C:/o/FIX.result.json', 1)).toBe(undefined)
+
+  const entry = cliLaunchEntry(bash, 9)!
+  const file = JSON.stringify({ local: [{ id: 'FIX-SR', model: 'opus' }, { id: 'OTHER' }], cloud: [], suites: null })
+  const listed = withLocalEntry(file, entry) ?? ''
+  expect(parseWorkerList(listed).local.map(e => [e.id, e.model, e.result])).toEqual([['OTHER', undefined, undefined], ['FIX-SR', 'sonnet', 'C:/work/out/FIX-SR.result.json']])
+  expect(JSON.parse(listed).suites).toBe(null)
+  expect(withLocalEntry('{ broken', entry)).toBe(undefined)
 })
