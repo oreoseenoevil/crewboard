@@ -3,7 +3,8 @@
 // the files and feeds them in.
 import type { AgentRun } from '../types'
 
-export type WorkerEntry = { id: string; label?: string; model?: string; effort?: string; worktree?: string; startedAt?: number; role?: string; session?: string; result?: string }
+/** `dir` is the folder the worker runs in: its `cd`, else the folder of the session that started it. */
+export type WorkerEntry = { id: string; label?: string; model?: string; effort?: string; worktree?: string; dir?: string; startedAt?: number; role?: string; session?: string; result?: string }
 /** A long CLI run (a test suite, a build): progress is lines matching `count` in `log`, out of `expected`. */
 export type TaskEntry = {
   id: string; label?: string; role?: string; startedAt?: number
@@ -59,6 +60,7 @@ const entries = (value: unknown): WorkerEntry[] =>
           model: str(one.model),
           effort: str(one.effort),
           worktree: str(one.worktree),
+          dir: str(one.dir),
           startedAt: when(one.startedAt),
           role: str(one.role),
           session: typeof one.session === 'string' && SESSION.test(one.session) ? one.session : undefined,
@@ -146,8 +148,9 @@ const isAbsolute = (path: string): boolean => /^([A-Za-z]:[\\/]|[\\/])/.test(pat
  * The local worker a shell command starts: a `claude -p` run whose output goes to `<ID>.result.json`.
  * Its folder is a leading `cd` or `Set-Location`, which a relative result path is read from.
  * None when the command is no such run, or names its paths through variables the shell would expand.
+ * `sessionDir`, the starting session's folder, is where the run works when the command has no `cd`.
  */
-export function cliLaunchEntry(command: string, at: number): WorkerEntry | undefined {
+export function cliLaunchEntry(command: string, at: number, sessionDir?: string): WorkerEntry | undefined {
   if (!/(^|[\s;&|(])claude(\.exe)?\s+(-p|--print)\b/.test(command)) return undefined
   const out = /(?:^|[^0-9&])>\s*("[^"]+\.result\.json"|'[^']+\.result\.json'|[^\s;&|"']+\.result\.json)/.exec(command)?.[1]
   if (!out) return undefined
@@ -160,7 +163,22 @@ export function cliLaunchEntry(command: string, at: number): WorkerEntry | undef
   const result = isAbsolute(resultPath) ? resultPath : worktree ? `${worktree.replace(/[\\/]+$/, '')}/${resultPath}` : undefined
   if (!result) return undefined
   const flag = (name: string) => /^[A-Za-z0-9._-]+$/.exec(new RegExp(`--${name}[ =](\\S+)`).exec(command)?.[1] ?? '')?.[0]
-  return { id, model: flag('model'), effort: flag('effort'), worktree, result, startedAt: at }
+  return { id, model: flag('model'), effort: flag('effort'), worktree, dir: worktree ?? (sessionDir || undefined), result, startedAt: at }
+}
+
+const baseName = (path: string): string => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+
+/**
+ * Where a worker runs, the way a person names it: the folder ("atrium-mobile"), or for a git
+ * worktree its repository and the worktree ("budgeting-hub › mob-p3-srv-2"). `gitFile` is the text
+ * of the folder's `.git` file, which only a worktree has; a repository's `.git` is a folder.
+ */
+export function placeOf(dir: string | undefined, gitFile: string): string | undefined {
+  if (!dir) return undefined
+  const name = baseName(dir)
+  const repo = /^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/]/m.exec(gitFile)?.[1]
+  const repoName = repo ? baseName(repo) : ''
+  return repoName && repoName !== name ? `${repoName} › ${name}` : name || undefined
 }
 
 /** The status file with this local worker, replacing an earlier row of the same id; none when the file is not a status file. */
@@ -317,7 +335,7 @@ export function pushedCloudIds(lsRemote: string): Set<string> {
   return ids
 }
 
-export type LocalFacts = { entry: WorkerEntry; result: ResultStats | null; endedAt?: number; transcript: TranscriptStats | null; promptAt?: number }
+export type LocalFacts = { entry: WorkerEntry; result: ResultStats | null; endedAt?: number; transcript: TranscriptStats | null; promptAt?: number; place?: string }
 
 const ROW_PREFIX = /^(local|cloud|task):/
 
@@ -347,6 +365,7 @@ export function localRow(f: LocalFacts, windowOf: (model: string) => number, at:
     role: roleOf(f.entry.role, f.entry.label ?? f.entry.id),
     activity: status === 'running' ? t?.activity : undefined,
     activityAt: status === 'running' ? t?.activityAt : undefined,
+    place: f.place,
   }
 }
 

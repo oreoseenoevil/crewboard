@@ -45,6 +45,8 @@ export type AgentRun = {
   /** What a session worker is doing right now ("Tests: dues.itest.ts"), and since when. */
   activity?: string
   activityAt?: number
+  /** Where a local worker runs: its folder, or "repository › worktree". */
+  place?: string
 }
 
 export type Panel = {

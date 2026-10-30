@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   cloudRow, commandText, localRow, parseWorkerList, projectDirName, pushedBranchOf, pushedCloudIds, resultStats, roleOf, taskRow, transcriptStats,
-  cliLaunchEntry, cloudIdOf, triggerRunEntry, withCloudEntry, withLocalEntry,
+  cliLaunchEntry, cloudIdOf, placeOf, triggerRunEntry, withCloudEntry, withLocalEntry,
 } from './workers'
 
 test('a worker shows what it is running now, named the way a person would say it', async () => {
@@ -122,9 +122,9 @@ test('a fetched branch is never a cloud id: the brief, then the routine name, na
 
 test('a claude -p launch from the shell lists its local worker with its own result file', () => {
   const bash = 'cd C:/work/wt/fix-sr && claude -p --model sonnet --effort high --output-format json < C:/work/briefs/FIX-SR.txt > C:/work/out/FIX-SR.result.json 2> C:/work/out/FIX-SR.err.txt'
-  expect(cliLaunchEntry(bash, 9)).toEqual({ id: 'FIX-SR', model: 'sonnet', effort: 'high', worktree: 'C:/work/wt/fix-sr', result: 'C:/work/out/FIX-SR.result.json', startedAt: 9 })
+  expect(cliLaunchEntry(bash, 9)).toEqual({ id: 'FIX-SR', model: 'sonnet', effort: 'high', worktree: 'C:/work/wt/fix-sr', dir: 'C:/work/wt/fix-sr', result: 'C:/work/out/FIX-SR.result.json', startedAt: 9 })
   const relative = 'Set-Location "C:\\work\\wt\\mig"; claude -p --model=opus < p.txt > "MIG-1.result.json"'
-  expect(cliLaunchEntry(relative, 1)).toEqual({ id: 'MIG-1', model: 'opus', effort: undefined, worktree: 'C:\\work\\wt\\mig', result: 'C:\\work\\wt\\mig/MIG-1.result.json', startedAt: 1 })
+  expect(cliLaunchEntry(relative, 1)).toEqual({ id: 'MIG-1', model: 'opus', effort: undefined, worktree: 'C:\\work\\wt\\mig', dir: 'C:\\work\\wt\\mig', result: 'C:\\work\\wt\\mig/MIG-1.result.json', startedAt: 1 })
   // No launch, a result path the shell would expand, no folder for a relative path, or stderr alone: no row.
   expect(cliLaunchEntry('git status > out.result.json', 1)).toBe(undefined)
   expect(cliLaunchEntry('claude -p < p.txt > "$S/FIX.result.json"', 1)).toBe(undefined)
@@ -137,4 +137,15 @@ test('a claude -p launch from the shell lists its local worker with its own resu
   expect(parseWorkerList(listed).local.map(e => [e.id, e.model, e.result])).toEqual([['OTHER', undefined, undefined], ['FIX-SR', 'sonnet', 'C:/work/out/FIX-SR.result.json']])
   expect(JSON.parse(listed).suites).toBe(null)
   expect(withLocalEntry('{ broken', entry)).toBe(undefined)
+})
+
+test('a worker row says where it runs: the folder, or a worktree with its repository', async () => {
+  expect(placeOf('C:/Users/PC/OneDrive/Desktop/project-101/atrium-mobile', '')).toBe('atrium-mobile')
+  expect(placeOf('C:/Users/PC/bh-wt/mob-p3-srv-2', 'gitdir: C:/Users/PC/OneDrive/Desktop/project-101/budgeting-hub/.git/worktrees/mob-p3-srv-2\n')).toBe('budgeting-hub › mob-p3-srv-2')
+  expect(placeOf('C:\\Users\\PC\\am-wt\\p2-app-a\\', 'gitdir: C:\\Users\\PC\\OneDrive\\Desktop\\project-101\\atrium-mobile\\.git\\worktrees\\p2-app-a')).toBe('atrium-mobile › p2-app-a')
+  expect(placeOf(undefined, '')).toBe(undefined)
+  const launch = 'claude -p --model sonnet --effort high --output-format json < C:/x/A-1.prompt.txt > C:/Users/PC/.claude/crewboard/A-1.result.json'
+  expect(cliLaunchEntry(launch, 1, 'C:/repo/atrium-mobile')?.dir).toBe('C:/repo/atrium-mobile')
+  expect(cliLaunchEntry(`cd C:/Users/PC/bh-wt/x && ${launch}`, 1, 'C:/repo/atrium-mobile')?.dir).toBe('C:/Users/PC/bh-wt/x')
+  expect(parseWorkerList(JSON.stringify({ local: [{ id: 'A-1', dir: 'C:/repo/atrium-mobile' }] })).local[0]?.dir).toBe('C:/repo/atrium-mobile')
 })

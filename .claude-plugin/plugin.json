@@ -1,6 +1,6 @@
 {
   "name": "crewboard",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "A progress band above the prompt and a Workers pane: subagents, local claude -p runs, cloud workers and long CLI tasks, with model, task progress, context, cost and time.",
   "author": {
     "name": "oreoseenoevil"

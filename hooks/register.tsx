@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
 import {
   cloudRow, isWorkerRow, localRow, parseWorkerList, projectDirName, pushedCloudIds, resultStats, taskRow, transcriptStats,
-  cliLaunchEntry, triggerRunEntry, withCloudEntry, withLocalEntry,
+  cliLaunchEntry, placeOf, triggerRunEntry, withCloudEntry, withLocalEntry,
   type LocalFacts, type TaskEntry, type TranscriptStats, type WorkerEntry,
 } from './workers'
 
@@ -751,7 +751,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   // The status mark sits in its own gutter at the right, so text and bar end before it.
   const barW = Math.max(60, W - textX - PAD - 22)
   const isTask = a.type === 'task'
-  const meta = isTask ? [] : [runModel(a)]
+  const meta = [...(a.place ? [a.place] : []), ...(isTask ? [] : [runModel(a)])]
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   if (a.status === 'failed') meta.push(s.failed)
   const progress = progressOf(a)
@@ -897,7 +897,10 @@ async function localFacts($: EngineInterface, c: Config, entry: WorkerEntry): Pr
       }
     }
   }
-  const facts: LocalFacts = { entry, result, endedAt: resultStat?.mtimeMs, transcript, promptAt: promptStat?.mtimeMs }
+  // Where it runs: a worktree's `.git` is a small file naming its repository; a repository's is a folder.
+  const where = entry.dir ?? entry.worktree
+  const place = placeOf(where, where ? await readText($, join(where, '.git')) : '')
+  const facts: LocalFacts = { entry, result, endedAt: resultStat?.mtimeMs, transcript, promptAt: promptStat?.mtimeMs, place }
   if (result) finishedLocal.set(entry.id, { key, facts })
   else finishedLocal.delete(entry.id)
   return facts
@@ -984,7 +987,10 @@ async function sync($: EngineInterface, options: Options): Promise<void> {
 async function listLaunch($: EngineInterface, options: Options, command: unknown): Promise<void> {
   try {
     // Most shell calls are not launches: they read no config.
-    const entry = typeof command === 'string' ? cliLaunchEntry(command, await $.clock.now()) : undefined
+    const entry =
+      typeof command === 'string' && /(^|[\s;&|(])claude(\.exe)?\s+(-p|--print)\b/.test(command)
+        ? cliLaunchEntry(command, await $.clock.now(), await $.session.cwd().catch(() => ''))
+        : undefined
     if (!entry) return
     const c = await configOf($, options)
     if (!c.file) return
@@ -1384,7 +1390,7 @@ export const register: Register = (on, options) => {
       const color = colorFor(a)
       const ctx = ctxOf(a)
       const progress = progressOf(a)
-      const model = a.type === 'task' ? '' : ` · ${runModel(a)}`
+      const model = `${a.place ? ` · ${a.place}` : ''}${a.type === 'task' ? '' : ` · ${runModel(a)}`}`
       const doing = activityText(a, at)
       const steps = `${a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''} · ` : ''}${doing ? doing + ' · ' : ''}`
       return (
